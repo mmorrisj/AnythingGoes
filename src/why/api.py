@@ -7,20 +7,25 @@ from sqlalchemy.orm import Session, selectinload
 
 from why.config import Settings, get_settings
 from why.db import get_session
+from why.embeddings import Embedder, embed_repository, get_embedder
 from why.git_log import GitError, is_git_repo
 from why.ingest import ingest_repository
 from why.models import Commit, FileChange, Repository
 from why.schemas import (
     CommitRead,
     CommitSummaryRead,
+    EmbedRead,
     IngestRead,
     RepositoryCreate,
     RepositoryRead,
+    SearchHitRead,
 )
+from why.search import SearchMode, search_commits
 
 router = APIRouter()
 SessionDep = Annotated[Session, Depends(get_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+EmbedderDep = Annotated[Embedder, Depends(get_embedder)]
 
 
 @router.get("/health")
@@ -72,6 +77,36 @@ def ingest(repository_id: int, session: SessionDep) -> IngestRead:
         file_changes_added=result.file_changes_added,
         head_sha=result.head_sha,
     )
+
+
+@router.post("/repositories/{repository_id}/embed")
+def embed(repository_id: int, session: SessionDep, embedder: EmbedderDep) -> EmbedRead:
+    """Embed commits not yet embedded with the configured model."""
+    _get_repository_or_404(session, repository_id)
+    count = embed_repository(session, repository_id, embedder)
+    return EmbedRead(commits_embedded=count, model=embedder.model)
+
+
+@router.get("/repositories/{repository_id}/search")
+def search(
+    repository_id: int,
+    session: SessionDep,
+    embedder: EmbedderDep,
+    q: Annotated[str, Query(min_length=1, max_length=500, description="What to look for.")],
+    mode: SearchMode = SearchMode.HYBRID,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> list[SearchHitRead]:
+    _get_repository_or_404(session, repository_id)
+    hits = search_commits(session, repository_id, q, embedder, mode=mode, limit=limit)
+    return [
+        SearchHitRead(
+            commit=CommitSummaryRead.model_validate(hit.commit),
+            score=hit.score,
+            keyword_rank=hit.keyword_rank,
+            semantic_rank=hit.semantic_rank,
+        )
+        for hit in hits
+    ]
 
 
 @router.get("/repositories/{repository_id}/commits")

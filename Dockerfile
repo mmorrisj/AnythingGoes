@@ -16,7 +16,7 @@ RUN uv sync --frozen --no-dev
 # Mounted repositories are owned by the host user; let git read them anyway.
 RUN git config --system --add safe.directory '*'
 
-RUN useradd --create-home app
+RUN useradd --create-home app && mkdir -p /home/app/.cache/why && chown -R app /home/app/.cache
 USER app
 
 EXPOSE 8000

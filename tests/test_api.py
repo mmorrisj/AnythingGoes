@@ -88,3 +88,36 @@ def test_not_found(client: TestClient) -> None:
     assert client.post("/repositories/999/ingest").status_code == 404
     assert client.get("/repositories/999/commits").status_code == 404
     assert client.get(f"/repositories/999/commits/{'a' * 40}").status_code == 404
+
+
+def test_embed_and_search(client: TestClient, git_repo: GitRepo) -> None:
+    git_repo.write("client.py", "retry\n")
+    sha = git_repo.commit("Cap retries at three attempts")
+    git_repo.write("docs.md", "docs\n")
+    git_repo.commit("Write docs")
+    repository_id = register(client, git_repo)
+    client.post(f"/repositories/{repository_id}/ingest")
+
+    embed = client.post(f"/repositories/{repository_id}/embed").json()
+    assert embed == {"commits_embedded": 2, "model": "test-hash"}
+
+    hits = client.get(f"/repositories/{repository_id}/search", params={"q": "retry"}).json()
+    assert hits[0]["commit"]["sha"] == sha
+    assert hits[0]["keyword_rank"] == 1
+    assert hits[0]["semantic_rank"] is not None
+    assert hits[0]["score"] > 0
+
+    keyword_only = client.get(
+        f"/repositories/{repository_id}/search", params={"q": "retry", "mode": "keyword"}
+    ).json()
+    assert [h["semantic_rank"] for h in keyword_only] == [None]
+
+
+def test_search_validation(client: TestClient, git_repo: GitRepo) -> None:
+    repository_id = register(client, git_repo)
+    url = f"/repositories/{repository_id}/search"
+
+    assert client.get(url, params={"q": ""}).status_code == 422
+    assert client.get(url, params={"q": "x", "mode": "psychic"}).status_code == 422
+    assert client.get("/repositories/999/search", params={"q": "x"}).status_code == 404
+    assert client.post("/repositories/999/embed").status_code == 404

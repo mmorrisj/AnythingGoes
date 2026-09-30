@@ -22,13 +22,16 @@ services:
     environment:
       WHY_DATABASE_URL: postgresql+psycopg://why:why@db:5432/why
       WHY_REPOS_ROOT: /repos
+      WHY_EMBEDDING_CACHE_DIR: /home/app/.cache/why
     ports:
       - "8000:8000"
     volumes:
       - ./repos:/repos:ro
+      - models:/home/app/.cache/why
     depends_on:
       db:
         condition: service_healthy
 
 volumes:
   pgdata:
+  models:
