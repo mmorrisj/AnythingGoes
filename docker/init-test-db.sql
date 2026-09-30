@@ -1,0 +1,1 @@
+CREATE DATABASE why_test OWNER why;
