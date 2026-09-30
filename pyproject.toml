@@ -7,6 +7,8 @@ requires-python = ">=3.11"
 dependencies = [
     "alembic>=1.13",
     "fastapi>=0.115",
+    "fastembed>=0.4",
+    "pgvector>=0.3",
     "psycopg[binary]>=3.2",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
@@ -48,3 +50,7 @@ python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["src/why"]
+
+[[tool.mypy.overrides]]
+module = ["pgvector.*", "fastembed.*"]
+ignore_missing_imports = true

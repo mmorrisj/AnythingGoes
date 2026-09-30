@@ -1,6 +1,9 @@
+import hashlib
+import math
 import os
+import re
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
@@ -13,7 +16,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from why.config import Settings, get_settings
 from why.db import get_session
+from why.embeddings import get_embedder
 from why.main import app
+from why.models import EMBEDDING_DIMENSIONS
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TEST_DB = "postgresql+psycopg://why:why@localhost:5432/why_test"
@@ -54,6 +59,35 @@ class GitRepo:
         return self.git("rev-parse", "HEAD")
 
 
+class HashEmbedder:
+    """Deterministic bag-of-words embedder: texts sharing words get similar vectors.
+
+    Stands in for the real model so tests need no download and are reproducible.
+    """
+
+    def __init__(self, model: str = "test-hash") -> None:
+        self.model = model
+
+    def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        return [self._embed(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed(text)
+
+    def _embed(self, text: str) -> list[float]:
+        vector = [0.0] * EMBEDDING_DIMENSIONS
+        for word in re.findall(r"[a-z]+", text.lower()):
+            digest = hashlib.sha256(word.encode()).digest()
+            vector[int.from_bytes(digest[:4], "big") % EMBEDDING_DIMENSIONS] += 1.0
+        norm = math.sqrt(sum(v * v for v in vector)) or 1.0
+        return [v / norm for v in vector]
+
+
+@pytest.fixture
+def embedder() -> HashEmbedder:
+    return HashEmbedder()
+
+
 @pytest.fixture
 def git_repo(tmp_path: Path) -> GitRepo:
     return GitRepo(tmp_path / "repos" / "project")
@@ -88,10 +122,11 @@ def session(engine: Engine) -> Iterator[Session]:
 
 
 @pytest.fixture
-def client(session: Session, tmp_path: Path) -> Iterator[TestClient]:
+def client(session: Session, tmp_path: Path, embedder: HashEmbedder) -> Iterator[TestClient]:
     settings = Settings(database_url="unused", repos_root=tmp_path / "repos")
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_embedder] = lambda: embedder
     with TestClient(app) as client:
         yield client
     app.dependency_overrides.clear()

@@ -1,7 +1,9 @@
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
+    Computed,
     DateTime,
     ForeignKey,
     Index,
@@ -12,7 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 # Deterministic constraint names keep Alembic migrations stable.
@@ -23,6 +25,9 @@ NAMING_CONVENTION = {
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
     "pk": "pk_%(table_name)s",
 }
+
+# Fixed by the embedding model; changing models with a different size needs a migration.
+EMBEDDING_DIMENSIONS = 384
 
 
 class Base(DeclarativeBase):
@@ -50,6 +55,7 @@ class Commit(Base):
     __table_args__ = (
         UniqueConstraint("repository_id", "sha", name="uq_commits_repository_id_sha"),
         Index("ix_commits_repository_id_committed_at", "repository_id", "committed_at"),
+        Index("ix_commits_search_vector", "search_vector", postgresql_using="gin"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -63,6 +69,10 @@ class Commit(Base):
     committed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     summary: Mapped[str] = mapped_column(Text)
     message: Mapped[str] = mapped_column(Text)
+    # Maintained by Postgres for keyword search; deferred so normal queries don't load it.
+    search_vector: Mapped[str] = mapped_column(
+        TSVECTOR, Computed("to_tsvector('english', message)", persisted=True), deferred=True
+    )
 
     repository: Mapped[Repository] = relationship(back_populates="commits")
     file_changes: Mapped[list["FileChange"]] = relationship(
@@ -89,3 +99,24 @@ class FileChange(Base):
     deletions: Mapped[int | None] = mapped_column(Integer)
 
     commit: Mapped[Commit] = relationship(back_populates="file_changes")
+
+
+class CommitEmbedding(Base):
+    __tablename__ = "commit_embeddings"
+    __table_args__ = (
+        Index(
+            "ix_commit_embeddings_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+
+    commit_id: Mapped[int] = mapped_column(
+        ForeignKey("commits.id", ondelete="CASCADE"), primary_key=True
+    )
+    # Embeddings from different models aren't comparable; search only uses the current model's.
+    model: Mapped[str] = mapped_column(String(255))
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

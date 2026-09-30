@@ -48,3 +48,15 @@ class CommitRead(CommitSummaryRead):
     parent_shas: list[str]
     message: str
     file_changes: list[FileChangeRead]
+
+
+class EmbedRead(BaseModel):
+    commits_embedded: int
+    model: str
+
+
+class SearchHitRead(BaseModel):
+    commit: CommitSummaryRead
+    score: float = Field(description="Reciprocal Rank Fusion score; higher is better.")
+    keyword_rank: int | None = Field(description="Rank in full-text results, if matched.")
+    semantic_rank: int | None = Field(description="Rank in vector results, if matched.")
